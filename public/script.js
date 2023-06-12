@@ -26,6 +26,7 @@ import {
     setWorldInfoSettings,
     deleteWorldInfo,
     world_info_recursive,
+    world_info_case_sensitive,
 } from "./scripts/world-info.js";
 
 import {
@@ -1369,10 +1370,10 @@ function getStoppingStrings(isImpersonate, addSpace) {
 
     if (power_user.instruct.enabled) {
         if (power_user.instruct.input_sequence) {
-            result.push(wrap(power_user.instruct.input_sequence));
+            result.push(substituteParams(wrap(power_user.instruct.input_sequence), name1, name2));
         }
         if (power_user.instruct.output_sequence) {
-            result.push(wrap(power_user.instruct.output_sequence));
+            result.push(substituteParams(wrap(power_user.instruct.output_sequence), name1, name2));
         }
     }
 
@@ -1764,15 +1765,16 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         abortController = new AbortController();
     }
 
+    // OpenAI doesn't need instruct mode. Use OAI main prompt instead.
+    const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
     const isImpersonate = type == "impersonate";
-    const isInstruct = power_user.instruct.enabled;
 
     message_already_generated = isImpersonate ? `${name1}: ` : `${name2}: `;
     // Name for the multigen prefix
     const magName = isImpersonate ? (is_pygmalion ? 'You' : name1) : name2;
 
     if (isInstruct) {
-        message_already_generated = formatInstructModePrompt(magName, isImpersonate);
+        message_already_generated = formatInstructModePrompt(magName, isImpersonate, false, name1, name2);
     } else {
         message_already_generated = `${magName}: `;
     }
@@ -2031,7 +2033,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         let mesSend = [];
         console.log('calling runGenerate');
         streamingProcessor = isStreamingEnabled() ? new StreamingProcessor(type, force_name2) : false;
-        await runGenerate();
+        runGenerate();
 
         async function runGenerate(cycleGenerationPromt = '') {
             is_send_press = true;
@@ -2114,14 +2116,14 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                 // Add quiet generation prompt at depth 0
                 if (quiet_prompt && quiet_prompt.length) {
                     const name = is_pygmalion ? 'You' : name1;
-                    const quietAppend = isInstruct ? formatInstructModeChat(name, quiet_prompt, false, true, false) : `\n${name}: ${quiet_prompt}`;
+                    const quietAppend = isInstruct ? formatInstructModeChat(name, quiet_prompt, false, true, false, name1, name2) : `\n${name}: ${quiet_prompt}`;
                     mesSendString += quietAppend;
                 }
 
                 // Get instruct mode line
                 if (isInstruct && tokens_already_generated === 0) {
                     const name = isImpersonate ? (is_pygmalion ? 'You' : name1) : name2;
-                    mesSendString += formatInstructModePrompt(name, isImpersonate, promptBias);
+                    mesSendString += formatInstructModePrompt(name, isImpersonate, promptBias, name1, name2);
                 }
 
                 // Get non-instruct impersonation line
@@ -2385,7 +2387,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                             $('#send_textarea').val(extract.getMessage).trigger('input');
                         }
 
-                        if (shouldContinueMultigen(getMessage, isImpersonate)) {
+                        if (shouldContinueMultigen(getMessage, isImpersonate, isInstruct)) {
                             hideSwipeButtons();
                             tokens_already_generated += this_amount_gen;            // add new gen amt to any prev gen counter..
                             getMessage = message_already_generated;
@@ -2539,7 +2541,7 @@ function formatMessageHistoryItem(chatItem, isInstruct) {
     let textResult = shouldPrependName ? `${itemName}: ${chatItem.mes}\n` : `${chatItem.mes}\n`;
 
     if (isInstruct) {
-        textResult = formatInstructModeChat(itemName, chatItem.mes, chatItem.is_user, isNarratorType, chatItem.force_avatar);
+        textResult = formatInstructModeChat(itemName, chatItem.mes, chatItem.is_user, isNarratorType, chatItem.force_avatar, name1, name2);
     }
 
     textResult = replaceBiasMarkup(textResult);
@@ -3024,8 +3026,8 @@ function getGenerateUrl() {
     return generate_url;
 }
 
-function shouldContinueMultigen(getMessage, isImpersonate) {
-    if (power_user.instruct.enabled && power_user.instruct.stop_sequence) {
+function shouldContinueMultigen(getMessage, isImpersonate, isInstruct) {
+    if (isInstruct && power_user.instruct.stop_sequence) {
         if (message_already_generated.indexOf(power_user.instruct.stop_sequence) !== -1) {
             return false;
         }
@@ -3151,17 +3153,17 @@ function cleanUpMessage(getMessage, isImpersonate, displayIncompleteSentences = 
     }
     if (getMessage.indexOf('<|endoftext|>') != -1) {
         getMessage = getMessage.substr(0, getMessage.indexOf('<|endoftext|>'));
-
     }
-    if (power_user.instruct.enabled && power_user.instruct.stop_sequence) {
+    const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
+    if (isInstruct && power_user.instruct.stop_sequence) {
         if (getMessage.indexOf(power_user.instruct.stop_sequence) != -1) {
             getMessage = getMessage.substring(0, getMessage.indexOf(power_user.instruct.stop_sequence));
         }
     }
-    if (power_user.instruct.enabled && power_user.instruct.input_sequence && isImpersonate) {
+    if (isInstruct && power_user.instruct.input_sequence && isImpersonate) {
         getMessage = getMessage.replaceAll(power_user.instruct.input_sequence, '');
     }
-    if (power_user.instruct.enabled && power_user.instruct.output_sequence && !isImpersonate) {
+    if (isInstruct && power_user.instruct.output_sequence && !isImpersonate) {
         getMessage = getMessage.replaceAll(power_user.instruct.output_sequence, '');
     }
     // clean-up group message from excessive generations
@@ -3294,14 +3296,14 @@ export function isMultigenEnabled() {
     return power_user.multigen && (main_api == 'textgenerationwebui' || main_api == 'kobold' || main_api == 'koboldhorde' || main_api == 'novel');
 }
 
-function activateSendButtons() {
+export function activateSendButtons() {
     is_send_press = false;
     $("#send_but").css("display", "flex");
     $("#send_textarea").attr("disabled", false);
     hideStopButton();
 }
 
-function deactivateSendButtons() {
+export function deactivateSendButtons() {
     $("#send_but").css("display", "none");
     showStopButton();
 }
@@ -4248,27 +4250,40 @@ function select_rm_info(type, charId, previousCharId = null) {
     getCharacters();
     selectRightMenuWithAnimation('rm_characters_block');
 
-    if (type === 'char_import' || type === 'char_create') {
+    setTimeout(function () {
+        if (type === 'char_import' || type === 'char_create') {
+            const element = $(`#rm_characters_block [title="${charId}"]`).parent().get(0);
+            console.log(element);
+            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-        const element = $(`#rm_characters_block [title="${charId}"]`).get(0);
-        element.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            try {
+                if (element !== undefined || element !== null) {
+                    $(element).addClass('flash animated');
+                    setTimeout(function () {
+                        $(element).removeClass('flash animated');
+                    }, 5000);
+                } else { console.log('didnt find the element'); }
+            } catch (e) {
+                console.error(e);
+            }
+        }
 
-        $(`#rm_characters_block [title="${charId}"]`).parent().addClass('flash animated');
-        setTimeout(function () {
-            $(`#rm_characters_block [title="${charId}"]`).parent().removeClass('flash animated');
-        }, 5000);
-    }
-
-    if (type === 'group_create') {
-        //for groups, ${charId} = data.id from group-chats.js createGroup()
-        const element = $(`#rm_characters_block [grid="${charId}"]`).get(0);
-        element.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        $(`#rm_characters_block [grid="${charId}"]`).addClass('flash animated');
-        setTimeout(function () {
-            $(`#rm_characters_block [grid="${charId}"]`).removeClass('flash animated');
-        }, 5000);
-    }
-
+        if (type === 'group_create') {
+            //for groups, ${charId} = data.id from group-chats.js createGroup()
+            const element = $(`#rm_characters_block [grid="${charId}"]`).get(0);
+            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            try {
+                if (element !== undefined || element !== null) {
+                    $(element).addClass('flash animated');
+                    setTimeout(function () {
+                        $(element).removeClass('flash animated');
+                    }, 5000);
+                } else { console.log('didnt find the element'); }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    }, 100);
     setRightTabSelectedClass();
 
     if (previousCharId) {
@@ -5105,6 +5120,12 @@ function importCharacter(file) {
 
 $(document).ready(function () {
     //////////INPUT BAR FOCUS-KEEPING LOGIC/////////////
+
+    setTimeout(function () {
+        $("#groupControlsToggle").trigger('click');
+        $("#groupCurrentMemberListToggle .inline-drawer-icon").trigger('click');
+    }, 200);
+
 
     $("#rm_print_characters_block").on('scroll',
         debounce(updateVisibleDivs, 5));

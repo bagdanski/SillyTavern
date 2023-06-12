@@ -1938,8 +1938,8 @@ app.post('/getgroups', jsonParser, (_, response) => {
         fs.mkdirSync(directories.groups);
     }
 
-    const files = fs.readdirSync(directories.groups);
-    const chats = fs.readdirSync(directories.groupChats);
+    const files = fs.readdirSync(directories.groups).filter(x => path.extname(x) === '.json');
+    const chats = fs.readdirSync(directories.groupChats).filter(x => path.extname(x) === '.jsonl');
 
     files.forEach(function (file) {
         try {
@@ -2684,7 +2684,8 @@ function putAsync(url, args) {
 }
 
 async function postAsync(url, args) {
-    const response = await fetch(url, { method: 'POST', ...args });
+    const fetch = require('node-fetch').default;
+    const response = await fetch(url, { method: 'POST', timeout: 0, ...args });
 
     if (response.ok) {
         const data = await response.json();
